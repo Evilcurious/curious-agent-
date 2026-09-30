@@ -12,7 +12,8 @@ A self-hosted, deploy-in-minutes chat interface for **NVIDIA NIM API** models (`
 - 🔑 **Admin panel (open to everyone)** — add **unlimited** NVIDIA API keys at `/admin`; keys are auto-rotated (least-recently-used first), invalid keys are auto-disabled, and each key can be tested / toggled / deleted
 - 🤖 **Model picker in the chat** — loads the *live* model catalog from NVIDIA once a key exists (curated fallback list before that)
 - 🖥️ **Website preview** — any HTML code block gets a **Code / Preview** tab; the preview runs in a sandboxed iframe and can be opened full-screen in a new tab
-- 🗄️ **Neon Postgres storage** — chats, messages and API keys persist in your own database (tables are created automatically)
+- 🔗 **Hosted preview links (Neon)** — generated websites can be opened or shared at `/p/<id>`, stored in your Neon database and **auto-deleted 5 minutes** after creation (configurable with `PREVIEW_TTL_MS`)
+- 🗄️ **Neon Postgres storage** — chats, messages, API keys and live previews persist in your own database (tables are created automatically)
 - 🛟 **Demo mode** — without `DATABASE_URL` the app still runs fully (in-memory), so you can try it before wiring up Neon
 
 ## Quick start (local)

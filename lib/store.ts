@@ -9,6 +9,10 @@ import { Pool } from 'pg';
 import crypto from 'crypto';
 import type { ChatSummary } from './types';
 
+// Hosted website previews live for 5 minutes by default (PREVIEW_TTL_MS overrides).
+export const PREVIEW_TTL_MS =
+  Number(process.env.PREVIEW_TTL_MS) > 0 ? Number(process.env.PREVIEW_TTL_MS) : 5 * 60 * 1000;
+
 export function uid(): string {
   return crypto.randomUUID();
 }
@@ -46,11 +50,19 @@ export interface StoredKey {
   created_at: string;
 }
 
+export interface StoredPreview {
+  id: string;
+  html: string;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface StoreStats {
   chats: number;
   messages: number;
   keys: number;
   keysEnabled: number;
+  previews: number;
 }
 
 export interface Store {
@@ -75,6 +87,9 @@ export interface Store {
   markKeyUsed(id: string): Promise<void>;
   recordKeyFailure(id: string, message: string): Promise<void>;
   deleteKey(id: string): Promise<void>;
+  createPreview(html: string): Promise<StoredPreview>;
+  getPreview(id: string): Promise<StoredPreview | null>;
+  purgeExpiredPreviews(): Promise<void>;
   stats(): Promise<StoreStats>;
 }
 
@@ -108,6 +123,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at TIMESTAMPTZ,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS previews (
+  id         TEXT PRIMARY KEY,
+  html       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_previews_expires ON previews (expires_at);
 `;
 
 function isLocalHost(host: string): boolean {
@@ -293,6 +315,41 @@ class PostgresStore implements Store {
     await this.pool.query('DELETE FROM api_keys WHERE id = $1', [id]);
   }
 
+  async createPreview(html: string): Promise<StoredPreview> {
+    await this.ready();
+    const id = uid();
+    const r = await this.pool.query(
+      `INSERT INTO previews (id, html, expires_at)
+       VALUES ($1, $2, now() + make_interval(secs => $3))
+       RETURNING id, html, created_at, expires_at`,
+      [id, html, PREVIEW_TTL_MS / 1000]
+    );
+    return this.mapPreview(r.rows[0]);
+  }
+
+  async getPreview(id: string): Promise<StoredPreview | null> {
+    await this.ready();
+    const r = await this.pool.query(
+      'SELECT id, html, created_at, expires_at FROM previews WHERE id = $1',
+      [id]
+    );
+    return r.rows[0] ? this.mapPreview(r.rows[0]) : null;
+  }
+
+  async purgeExpiredPreviews(): Promise<void> {
+    await this.ready();
+    await this.pool.query('DELETE FROM previews WHERE expires_at < now()');
+  }
+
+  private mapPreview(row: Record<string, unknown>): StoredPreview {
+    return {
+      id: String(row.id),
+      html: String(row.html ?? ''),
+      created_at: new Date(row.created_at as string).toISOString(),
+      expires_at: new Date(row.expires_at as string).toISOString(),
+    };
+  }
+
   async stats(): Promise<StoreStats> {
     await this.ready();
     const r = await this.pool.query(`
@@ -300,7 +357,8 @@ class PostgresStore implements Store {
         (SELECT count(*) FROM chats) AS chats,
         (SELECT count(*) FROM messages) AS messages,
         (SELECT count(*) FROM api_keys) AS keys,
-        (SELECT count(*) FROM api_keys WHERE enabled) AS keys_enabled
+        (SELECT count(*) FROM api_keys WHERE enabled) AS keys_enabled,
+        (SELECT count(*) FROM previews) AS previews
     `);
     const row = r.rows[0];
     return {
@@ -308,6 +366,7 @@ class PostgresStore implements Store {
       messages: Number(row.messages),
       keys: Number(row.keys),
       keysEnabled: Number(row.keys_enabled),
+      previews: Number(row.previews),
     };
   }
 }
@@ -326,6 +385,7 @@ class MemoryStore implements Store {
   private chats = new Map<string, MemChat>();
   private messages: StoredMessage[] = [];
   private keys = new Map<string, StoredKey>();
+  private previews = new Map<string, StoredPreview>();
   private seq = 0;
 
   async listChats(): Promise<ChatSummary[]> {
@@ -459,14 +519,47 @@ class MemoryStore implements Store {
     this.keys.delete(id);
   }
 
+  async createPreview(html: string): Promise<StoredPreview> {
+    const p: StoredPreview = {
+      id: uid(),
+      html,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + PREVIEW_TTL_MS).toISOString(),
+    };
+    this.previews.set(p.id, p);
+    return p;
+  }
+
+  async getPreview(id: string): Promise<StoredPreview | null> {
+    const p = this.previews.get(id);
+    if (!p) return null;
+    if (new Date(p.expires_at).getTime() <= Date.now()) {
+      this.previews.delete(id);
+      return null;
+    }
+    return p;
+  }
+
+  async purgeExpiredPreviews(): Promise<void> {
+    const now = Date.now();
+    for (const [id, p] of this.previews) {
+      if (new Date(p.expires_at).getTime() <= now) this.previews.delete(id);
+    }
+  }
+
   async stats(): Promise<StoreStats> {
     let enabled = 0;
     for (const k of this.keys.values()) if (k.enabled) enabled += 1;
+    let livePreviews = 0;
+    for (const p of this.previews.values()) {
+      if (new Date(p.expires_at).getTime() > Date.now()) livePreviews += 1;
+    }
     return {
       chats: this.chats.size,
       messages: this.messages.length,
       keys: this.keys.size,
       keysEnabled: enabled,
+      previews: livePreviews,
     };
   }
 }

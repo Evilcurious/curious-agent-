@@ -35,6 +35,7 @@ export interface HealthInfo {
   keys: { total: number; enabled: number };
   chats: number;
   messages: number;
+  previews: number;
   models: { source: 'live' | 'fallback'; count: number };
 }
 

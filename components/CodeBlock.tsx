@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import hljs from 'highlight.js/lib/common';
-import { IconCheck, IconCode, IconCopy, IconEye, IconExternal } from './Icons';
+import { IconCheck, IconCode, IconCopy, IconEye, IconExternal, IconLink } from './Icons';
 
 const PREVIEW_LANGS = new Set(['html', 'htm', 'xhtml']);
 
@@ -39,6 +39,7 @@ export default function CodeBlock({
   const [tab, setTab] = useState<'code' | 'preview'>(previewable && !streaming ? 'preview' : 'code');
   const userPicked = useRef(false);
   const [copied, setCopied] = useState(false);
+  const [linkState, setLinkState] = useState<'idle' | 'creating' | 'copied'>('idle');
 
   // When generation finishes, auto-switch to the Preview tab for HTML.
   useEffect(() => {
@@ -67,11 +68,48 @@ export default function CodeBlock({
     }
   };
 
-  const openInTab = () => {
-    const blob = new Blob([toDocument(code)], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  // Host the generated page in the database (Neon) and open it at /p/<id>.
+  // Hosted previews auto-delete 5 minutes after creation.
+  const openHosted = async () => {
+    const win = window.open('about:blank', '_blank');
+    const fallback = () => {
+      const blob = new Blob([toDocument(code)], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      if (win) win.location.href = url;
+      else window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    };
+    try {
+      const r = await fetch('/api/previews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: toDocument(code) }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.url) throw new Error(j.error || 'Failed to create preview');
+      if (win) win.location.href = j.url;
+      else window.open(j.url, '_blank');
+    } catch {
+      fallback();
+    }
+  };
+
+  const copyLink = async () => {
+    setLinkState('creating');
+    try {
+      const r = await fetch('/api/previews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: toDocument(code) }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.url) throw new Error(j.error || 'Failed to create preview');
+      await navigator.clipboard.writeText(`${window.location.origin}${j.url}`);
+      setLinkState('copied');
+      setTimeout(() => setLinkState('idle'), 2000);
+    } catch {
+      setLinkState('idle');
+    }
   };
 
   const pick = (t: 'code' | 'preview') => {
@@ -106,9 +144,23 @@ export default function CodeBlock({
             {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
           </button>
           {previewable && !streaming && (
-            <button className="mini-btn" onClick={openInTab} title="Open preview in a new tab">
-              <IconExternal size={13} />
-            </button>
+            <>
+              <button
+                className="mini-btn"
+                onClick={copyLink}
+                disabled={linkState === 'creating'}
+                title="Copy shareable preview link (hosted for 5 minutes)"
+              >
+                {linkState === 'copied' ? <IconCheck size={13} /> : <IconLink size={13} />}
+              </button>
+              <button
+                className="mini-btn"
+                onClick={openHosted}
+                title="Open hosted preview in a new tab (hosted for 5 minutes)"
+              >
+                <IconExternal size={13} />
+              </button>
+            </>
           )}
         </div>
       </div>

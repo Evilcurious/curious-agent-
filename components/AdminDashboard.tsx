@@ -168,6 +168,10 @@ export default function AdminDashboard() {
           </div>
           <div className="stat-label">Models available</div>
         </div>
+        <div className="stat-card">
+          <div className="stat-value">{health ? health.previews : '–'}</div>
+          <div className="stat-label">Live website previews · 5-min TTL</div>
+        </div>
       </div>
 
       <div className="admin-grid">

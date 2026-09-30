@@ -8,6 +8,8 @@ export const runtime = 'nodejs';
 export async function GET() {
   try {
     const store = getStore();
+    // Lazy cleanup: drop previews that are past their 5-minute TTL.
+    await store.purgeExpiredPreviews().catch(() => undefined);
     const stats = await store.stats();
     const cached = getCachedModels();
     const health: HealthInfo = {
@@ -15,6 +17,7 @@ export async function GET() {
       keys: { total: stats.keys, enabled: stats.keysEnabled },
       chats: stats.chats,
       messages: stats.messages,
+      previews: stats.previews,
       models: { source: cached ? 'live' : 'fallback', count: (cached ?? FALLBACK_MODELS).length },
     };
     return Response.json(health);
